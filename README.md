@@ -78,6 +78,9 @@ The history analytics view (`HistoryAnalytics`) provides insights into past conv
 
 ### Memory Dashboard (components/memory_dashboard.py)
 
+**Session Persistence**: MilimoChat uses session IDs to store chat memories in a local database. To ensure persistent memory across application shutdowns and restarts, it's essential to bookmark the application URL or save the session ID from the URL. This allows you to return to the same session and access your past chat history and long-term memories.
+
+
 ![Memory Dashboard](assets/screenshots/milimochat-4.png)
 
 The memory dashboard (`MemoryDashboard`) offers tools to manage and understand the chatbot's memory:
