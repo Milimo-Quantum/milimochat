@@ -48,11 +48,11 @@ The chat interface (`ChatInterface`) is the main component for user interaction.
 - **Real-time Streaming**: Displays assistant responses in real-time as they are generated.
 - **Styling**: Uses custom CSS for enhanced visual appeal and user experience.
 
-### Customization Panel (components/customization_panel.py)
+### Settings (main.py)
 
-![Customization Panel](assets/screenshots/milimochat-2.png)
+![Settings](assets/screenshots/milimochat-2.png)
 
-The customization panel (`CustomizationPanel`) in the sidebar allows users to personalize their chat experience:
+The settings section (`main.py`) in the sidebar allows users to personalize their chat experience:
 - **Model Selection**: Users can choose from a list of available language models (e.g., llama2, llama3) to power the chatbot.
   To change the default `VISION_MODEL` and `EMBED_MODEL`, modify the `config.py` file.
 - **Personality Presets**: Offers a selection of personality presets (e.g., Professional, Creative, Informative) that define the chatbot's behavior and tone.
