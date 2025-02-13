@@ -54,6 +54,7 @@ The chat interface (`ChatInterface`) is the main component for user interaction.
 
 The customization panel (`CustomizationPanel`) in the sidebar allows users to personalize their chat experience:
 - **Model Selection**: Users can choose from a list of available language models (e.g., llama2, llama3) to power the chatbot.
+  To change the default `VISION_MODEL` and `EMBED_MODEL`, modify the `config.py` file.
 - **Personality Presets**: Offers a selection of personality presets (e.g., Professional, Creative, Informative) that define the chatbot's behavior and tone.
 - **Tone and Creativity Control**: Sliders to adjust the tone (e.g., Formal, Balanced, Casual) and creativity level (e.g., Conservative, Balanced, Creative) of the chatbot's responses.
 - **Memory Controls**: Toggles to enable or disable chat memory, allowing users to control context retention.
