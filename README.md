@@ -38,7 +38,7 @@ MilimoChat is a sophisticated, locally-run chat application engineered for users
 
 ### Chat Interface (components/chat_interface.py)
 
-![Chat Interface](assets/milimochat-1.png)
+![Chat Interface](assets/screenshots/milimochat-1.png)
 
 The chat interface (`ChatInterface`) is the main component for user interaction. It provides:
 - **Input Area**: A text input area for users to type messages.
@@ -50,7 +50,7 @@ The chat interface (`ChatInterface`) is the main component for user interaction.
 
 ### Customization Panel (components/customization_panel.py)
 
-![Customization Panel](assets/milimochat-2.png)
+![Customization Panel](assets/screenshots/milimochat-2.png)
 
 The customization panel (`CustomizationPanel`) in the sidebar allows users to personalize their chat experience:
 - **Model Selection**: Users can choose from a list of available language models (e.g., llama2, llama3) to power the chatbot.
@@ -61,7 +61,7 @@ The customization panel (`CustomizationPanel`) in the sidebar allows users to pe
 
 ### History Analytics (components/history_analytics.py)
 
-![History Analytics](assets/milimochat-3.png)
+![History Analytics](assets/screenshots/milimochat-3.png)
 
 The history analytics view (`HistoryAnalytics`) provides insights into past conversations:
 - **Chat History Display**: Shows a searchable and filterable history of all conversations.
@@ -77,7 +77,7 @@ The history analytics view (`HistoryAnalytics`) provides insights into past conv
 
 ### Memory Dashboard (components/memory_dashboard.py)
 
-![Memory Dashboard](assets/milimochat-4.png)
+![Memory Dashboard](assets/screenshots/milimochat-4.png)
 
 The memory dashboard (`MemoryDashboard`) offers tools to manage and understand the chatbot's memory:
 - **Memory Overview**: Displays key memory metrics, such as total memories, active memories, and average memory age.
