@@ -1,0 +1,254 @@
+/* Base Animation Keyframes */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes slideInUp {
+    from {
+        transform: translateY(20px);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+@keyframes slideInLeft {
+    from {
+        transform: translateX(-20px);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+@keyframes scaleIn {
+    from {
+        transform: scale(0.95);
+        opacity: 0;
+    }
+    to {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+@keyframes pulse {
+    0% {
+        transform: scale(1);
+    }
+    50% {
+        transform: scale(1.05);
+    }
+    100% {
+        transform: scale(1);
+    }
+}
+
+@keyframes shimmer {
+    0% {
+        background-position: -1000px 0;
+    }
+    100% {
+        background-position: 1000px 0;
+    }
+}
+
+@keyframes spinner {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes typingDot {
+    0%, 100% { opacity: 0.2; }
+    50% { opacity: 1; }
+}
+
+/* Apply Animations to Elements */
+
+/* Message Animations */
+.chat-message {
+    animation: slideInUp 0.3s ease-out forwards;
+}
+
+.user-message {
+    animation: slideInLeft 0.3s ease-out forwards;
+}
+
+.assistant-message {
+    animation: slideInLeft 0.3s ease-out forwards;
+}
+
+/* Loading States */
+.loading-spinner {
+    width: 24px;
+    height: 24px;
+    border: 3px solid rgba(0, 200, 255, 0.1);
+    border-top-color: #00C8FF;
+    border-radius: 50%;
+    animation: spinner 0.6s linear infinite;
+}
+
+.loading-shimmer {
+    background: linear-gradient(
+        90deg,
+        rgba(0, 200, 255, 0) 0%,
+        rgba(0, 200, 255, 0.05) 50%,
+        rgba(0, 200, 255, 0) 100%
+    );
+    background-size: 1000px 100%;
+    animation: shimmer 2s infinite;
+}
+
+/* Typing Indicator */
+.typing-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.typing-indicator span {
+    width: 4px;
+    height: 4px;
+    background-color: #00C8FF;
+    border-radius: 50%;
+    animation: typingDot 1s infinite;
+}
+
+.typing-indicator span:nth-child(2) {
+    animation-delay: 0.2s;
+}
+
+.typing-indicator span:nth-child(3) {
+    animation-delay: 0.4s;
+}
+
+/* Button Hover Effects */
+.stButton button {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.stButton button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 200, 255, 0.25);
+}
+
+/* Card Hover Effects */
+.memory-card, .file-card {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.memory-card:hover, .file-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+/* Input Focus Effects */
+.stTextInput input:focus,
+.stTextArea textarea:focus {
+    animation: pulse 0.3s ease-out;
+}
+
+/* Notification Animation */
+@keyframes slideInNotification {
+    0% {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    10% {
+        transform: translateX(0);
+        opacity: 1;
+    }
+    90% {
+        transform: translateX(0);
+        opacity: 1;
+    }
+    100% {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+}
+
+.notification {
+    animation: slideInNotification 5s ease-in-out forwards;
+}
+
+/* Metric Card Animation */
+.metric-card {
+    animation: scaleIn 0.3s ease-out;
+}
+
+/* Progress Bar Animation */
+@keyframes progressBar {
+    from {
+        width: 0;
+    }
+    to {
+        width: var(--progress-width);
+    }
+}
+
+.progress-bar {
+    animation: progressBar 0.6s ease-out forwards;
+}
+
+/* File Upload Dropzone Animation */
+@keyframes dropzonePulse {
+    0% {
+        box-shadow: 0 0 0 0 rgba(0, 200, 255, 0.4);
+    }
+    70% {
+        box-shadow: 0 0 0 10px rgba(0, 200, 255, 0);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(0, 200, 255, 0);
+    }
+}
+
+.upload-dropzone.active {
+    animation: dropzonePulse 1.5s infinite;
+}
+
+/* Sidebar Transition */
+.sidebar-transition {
+    transition: transform 0.3s ease, opacity 0.3s ease;
+}
+
+.sidebar-hidden {
+    transform: translateX(-100%);
+    opacity: 0;
+}
+
+/* Modal Animation */
+@keyframes modalFadeIn {
+    from {
+        transform: scale(0.95);
+        opacity: 0;
+    }
+    to {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+.modal-content {
+    animation: modalFadeIn 0.3s ease-out;
+}
+
+/* Tab Transition */
+.tab-transition {
+    transition: opacity 0.3s ease;
+}
+
+.tab-hidden {
+    opacity: 0;
+}
