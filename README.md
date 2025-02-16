@@ -12,27 +12,46 @@ MilimoChat is a sophisticated, locally-run chat application engineered for users
 
 ## Installation
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/milimo-quantum/milimochat.git
-   cd milimochat
-   ```
+1.  Clone the repository:
+    ```bash
+    git clone https://github.com/milimo-quantum/milimochat.git
+    cd milimochat
+    ```
 
-2. Create a virtual environment and activate it:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate
-   ```
+2.  Set up a Conda environment:
 
-3. Install the required dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+    ```bash
+    # Conda (required)
+    ```
 
-4. Run the application:
-   ```bash
-   streamlit run main.py
-   ```
+3.  Install the required dependencies:
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+4.  Run the application:
+    ```bash
+    streamlit run main.py
+    ```
+
+## Conda Environment Setup
+
+1.  **Install Conda:** If you don't have Conda installed, you can download and install it from [https://docs.conda.io/en/latest/miniconda.html](https://docs.conda.io/en/latest/miniconda.html). Follow the instructions for your operating system.
+
+2.  **Create a Conda environment:**
+    ```bash
+    conda create -n milimochat python=3.12
+    ```
+
+3.  **Activate the environment:**
+    ```bash
+    conda activate milimochat
+    ```
+
+4.  **Install dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
 
 ## Usage
 
