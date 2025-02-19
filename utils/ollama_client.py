@@ -189,7 +189,7 @@ class OllamaClient:
                         )
                         response.raise_for_status()
                         result = response.json()
-                        logger.info(f"Ollama API response: {result}") # Log the full API response
+                        #logger.info(f"Ollama API response: {result}") # Log the full API response
                         batch_embeddings.append(result.get("embedding", []))
 
                     embeddings.extend(batch_embeddings)
