@@ -33,6 +33,9 @@ MilimoChat is a sophisticated, locally-run chat application engineered for users
     ```bash
     streamlit run main.py
     ```
+    
+    **Video Instructions:** For a visual guide on installing and running MilimoChat, watch this video by Fahd Mirza:
+    [![MilimoChat Installation and Run](http://img.youtube.com/vi/3Ak4-sIbDt0/0.jpg)](https://www.youtube.com/watch?v=3Ak4-sIbDt0)
 
 ## Conda Environment Setup
 
@@ -135,5 +138,3 @@ Contributions are welcome! Please follow these steps to contribute:
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
-<iframe width="560" height="315" src="https://www.youtube.com/embed/3Ak4-sIbDt0?si=YGWvtfMW-1K3naeJ" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
