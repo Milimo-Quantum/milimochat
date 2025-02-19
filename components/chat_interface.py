@@ -919,13 +919,9 @@ class ChatInterface:
                     """
                 ):
                     # Document preview with context info
-                    tabs = st.tabs(["Content", "Chunks", "Analysis"])
+                    tabs = st.tabs(["Chunks"])
 
                     with tabs[0]:
-                        st.markdown("### Document Content")
-                        st.markdown(file_data.get('content', 'No content available'))
-
-                    with tabs[1]:
                         st.markdown("### Document Chunks")
                         for i, chunk in enumerate(file_data.get('chunks', [])):
                             st.markdown(f"**Chunk {i+1}:**") # Replace expander with markdown
@@ -933,19 +929,6 @@ class ChatInterface:
                             if file_data.get('chunk_embeddings', []):
                                 st.success("✓ Vector embedding generated")
                             st.markdown("---") # Add separator
-                    with tabs[2]:
-                        st.markdown("### Analysis")
-                        st.json(message_metadata['vector_context'])
-
-                        # Display relevant contexts if available
-                        if hasattr(st.session_state, '_current_context'):
-                            st.markdown("### Context Relevance")
-                            for i, chunk_embedding in enumerate(file_data.get('chunk_embeddings', [])):
-                                relevance = self.context_integrator.calculate_relevance(
-                                    chunk_embedding,
-                                    st.session_state._current_context
-                                )
-                                st.progress(relevance, text=f"Chunk {i+1} Relevance: {relevance:.2f}")
 
                 # Mark file as processed
                 st.session_state.processed_files.add(doc_file.name)
