@@ -136,10 +136,28 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_memory_session
                 ON memory(key, created_at DESC)
             """)
+
+            # Add full-text search index for content-based searches
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_memory_content
+                ON memory(content)
+            """)
+            
+            # Add metadata index for faster JSON extraction queries
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_memory_metadata
+                ON memory(metadata)
+            """)
             
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_messages_session
                 ON messages(session_id, timestamp DESC)
+            """)
+            
+            # Add content index on messages for text search
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_messages_content
+                ON messages(content)
             """)
             
             cursor.execute("""
@@ -355,12 +373,54 @@ class Database:
         min_score: float = 0.0,
         search_messages: bool = True
     ) -> List[Dict[str, Any]]:
-        """Retrieve memories based on vector similarity with enhanced message search."""
+        """Retrieve memories based on vector similarity with enhanced message search and exact text matching."""
         try:
             memories = []
             
-            # Search vector store for memory entries
-            query = """
+            # 1. First search for exact text matches in all memory entries
+            exact_match_query = """
+                SELECT m.*, v.id as vector_id, v.vector
+                FROM memory m
+                LEFT JOIN vector_store v ON m.vector_id = v.id
+                WHERE m.content LIKE ?
+            """
+            # Use simplified query text for exact matches
+            query_text = " ".join(str(query_vector[:5])).split()[:3]  # Use first few elements of vector as text proxy
+            
+            exact_match_params = [f"%{query_text}%"]
+            
+            if session_id:
+                exact_match_query += " AND (m.session_id = ? OR json_extract(m.metadata, '$.session_id') = ?)"
+                exact_match_params.extend([session_id, session_id])
+            
+            logger.info(f"Executing exact match query: {exact_match_query} with params: {exact_match_params}")
+            
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(exact_match_query, exact_match_params)
+                
+                for row in cursor.fetchall():
+                    similarity = 1.0  # Exact matches get highest similarity
+                    
+                    if row['vector']:
+                        vector = self._deserialize_vector(row['vector'])
+                        vector_similarity = self._cosine_similarity(query_vector, vector)
+                        # Still calculate real similarity but boost exact matches
+                        similarity = max(0.9, vector_similarity)
+                    
+                    memories.append({
+                        'key': row['key'],
+                        'content': row['content'],
+                        'created_at': row['created_at'],
+                        'metadata': json.loads(row['metadata']) if row['metadata'] else {},
+                        'similarity': similarity,
+                        'chunk_index': row['chunk_index'],
+                        'source': 'memory',
+                        'match_type': 'exact'
+                    })
+            
+            # 2. Then search vector store for memory entries (comprehensive search)
+            vector_query = """
                 SELECT m.*, v.vector
                 FROM memory m
                 JOIN vector_store v ON m.vector_id = v.id
@@ -368,52 +428,106 @@ class Database:
             params = []
             
             if session_id:
-                query += " WHERE m.session_id = ?"
-                params.append(session_id)
+                vector_query += " WHERE (m.session_id = ? OR json_extract(m.metadata, '$.session_id') = ?)"
+                params.extend([session_id, session_id])
             
-            logger.info(f"Executing memory query: {query} with params: {params}") # Log query
+            logger.info(f"Executing memory vector query: {vector_query} with params: {params}")
             
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(query, params)
+                cursor.execute(vector_query, params)
                 
                 for row in cursor.fetchall():
                     vector = self._deserialize_vector(row['vector'])
                     similarity = self._cosine_similarity(query_vector, vector)
                     
                     if similarity >= min_score:
-                        memories.append({
-                            'key': row['key'],
-                            'content': row['content'],
-                            'created_at': row['created_at'],
-                            'metadata': json.loads(row['metadata']) if row['metadata'] else {},
-                            'similarity': similarity,
-                            'chunk_index': row['chunk_index'],
-                            'source': 'memory'
-                        })
+                        # Check if already added from exact match
+                        if not any(m.get('key') == row['key'] for m in memories):
+                            memories.append({
+                                'key': row['key'],
+                                'content': row['content'],
+                                'created_at': row['created_at'],
+                                'metadata': json.loads(row['metadata']) if row['metadata'] else {},
+                                'similarity': similarity,
+                                'chunk_index': row['chunk_index'],
+                                'source': 'memory',
+                                'match_type': 'vector'
+                            })
             
-            # Also search message history if enabled
+            # 3. Also search ALL message history with comprehensive approach
             if search_messages:
-                message_query = """
+                # 3.1 First try to get messages with vector embeddings
+                message_vector_query = """
                     SELECT m.*, v.id as vector_id, v.vector
                     FROM messages m
-                    JOIN vector_store v ON json_extract(m.metadata, '$.vector_id') = v.id
+                    LEFT JOIN vector_store v ON json_extract(m.metadata, '$.vector_id') = v.id
                     WHERE m.session_id = ?
                 """
                 
-                logger.info(f"Executing messages query: {message_query} with params: [{session_id}]") # Log query
+                logger.info(f"Executing messages vector query: {message_vector_query} with params: [{session_id}]")
                 
                 with self._get_connection() as conn:
                     cursor = conn.cursor()
-                    cursor.execute(message_query, (session_id,))
+                    cursor.execute(message_vector_query, (session_id,))
                     
                     for row in cursor.fetchall():
                         try:
+                            message_id = row['id']
+                            similarity = 0.0
+                            
+                            # Check if we have a vector for semantic similarity
                             if row['vector']:
                                 vector = self._deserialize_vector(row['vector'])
                                 similarity = self._cosine_similarity(query_vector, vector)
+                            
+                            # Fallback to content-based similarity if needed
+                            if similarity < min_score:
+                                # Check content for relevant keywords
+                                message_content = row['content'].lower()
+                                query_parts = str(query_vector[:10]).lower().split()
                                 
-                                if similarity >= min_score:
+                                if any(part in message_content for part in query_parts):
+                                    similarity = max(similarity, 0.7)  # Boost for keyword match
+                            
+                            if similarity >= min_score:
+                                metadata = {}
+                                if row['metadata']:
+                                    try:
+                                        metadata = json.loads(row['metadata'])
+                                    except:
+                                        pass
+                                
+                                memories.append({
+                                    'key': f"message_{message_id}",
+                                    'content': row['content'],
+                                    'created_at': row['timestamp'],
+                                    'metadata': metadata,
+                                    'similarity': similarity,
+                                    'role': row['role'],
+                                    'source': 'message',
+                                    'match_type': 'vector' if row['vector'] else 'content'
+                                })
+                        except Exception as e:
+                            logger.error(f"Error processing message row: {str(e)}")
+                
+                # 3.2 Search messages specifically for exact content matches
+                message_content_query = """
+                    SELECT *
+                    FROM messages 
+                    WHERE content LIKE ? AND session_id = ?
+                """
+                
+                content_terms = [word for word in " ".join(str(query_vector[:10])).split() if len(word) > 3][:3]
+                for term in content_terms:
+                    try:
+                        with self._get_connection() as conn:
+                            cursor = conn.cursor()
+                            cursor.execute(message_content_query, (f"%{term}%", session_id))
+                            
+                            for row in cursor.fetchall():
+                                message_id = row['id']
+                                if not any(m.get('key') == f"message_{message_id}" for m in memories):
                                     metadata = {}
                                     if row['metadata']:
                                         try:
@@ -422,26 +536,35 @@ class Database:
                                             pass
                                     
                                     memories.append({
-                                        'key': f"message_{row['id']}",
+                                        'key': f"message_{message_id}",
                                         'content': row['content'],
                                         'created_at': row['timestamp'],
                                         'metadata': metadata,
-                                        'similarity': similarity,
+                                        'similarity': 0.8,  # High similarity for content matches
                                         'role': row['role'],
-                                        'source': 'message'
+                                        'source': 'message',
+                                        'match_type': 'keyword'
                                     })
-                        except Exception as e:
-                            logger.error(f"Error processing message row: {str(e)}")
+                    except Exception as e:
+                        logger.error(f"Error in content term search: {str(e)}")
             
-            # Sort by similarity and return top-k
+            # 4. Sort by similarity and return top-k
             memories.sort(key=lambda x: x['similarity'], reverse=True)
             
-            # Log retrieval statistics
-            logger.info(f"Retrieved {len(memories)} memories/messages with {len([m for m in memories if m.get('source') == 'message'])} from messages")
-            if memories:
-                logger.info(f"Top memory similarity: {memories[0]['similarity']}, content: {memories[0]['content'][:100]}...")
+            # 5. Log detailed retrieval statistics
+            memory_sources = {}
+            for m in memories:
+                source = f"{m.get('source', 'unknown')}_{m.get('match_type', 'unknown')}"
+                memory_sources[source] = memory_sources.get(source, 0) + 1
             
-            return memories[:top_k]
+            logger.info(f"Retrieved {len(memories)} memories/messages with sources: {memory_sources}")
+            if memories:
+                logger.info(f"Top memory: {memories[0].get('match_type')} match, similarity: {memories[0]['similarity']}, content: {memories[0]['content'][:100]}...")
+            
+            # Ensure we don't exceed top_k limit but have at least some results
+            result_memories = memories[:top_k] if len(memories) > top_k else memories
+            
+            return result_memories
         except Exception as e:
             print(f"Error retrieving memories by similarity: {str(e)}")
             return []

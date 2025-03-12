@@ -51,63 +51,105 @@ class ChatService:
         stream: bool = True,
         is_initial_message: bool = False
     ) -> AsyncGenerator[str, None]:
-        """Process a user message with enhanced context integration."""
+        """Process a user message with enhanced context integration and exhaustive memory search."""
+        logger = logging.getLogger(__name__)
         try:
-            # Generate embeddings for message
+            # Start timing for analytics
+            start_time = datetime.now()
+            
+            # Generate embeddings for message with enhanced model
+            logger.info(f"Generating embeddings for message: {message[:50]}...")
             message_embedding = await self.ollama_client.generate_embeddings(message)
             
             # Convert message embedding to list if it's numpy array
             query_embedding = message_embedding.tolist() if hasattr(message_embedding, 'tolist') else message_embedding
             
-            # Skip previous message search for initial message in conversation
+            # Prepare context depending on message type
             if is_initial_message:
+                logger.info("Initial message detected, setting up fresh conversation context")
                 long_term_memories = []
                 context_messages = []
-                context_metadata = {"total_memories": 0, "info": "initial_message"}
-                logger = logging.getLogger(__name__)
-                logger.info("Initial message detected, skipping context retrieval")
+                context_metadata = {
+                    "total_memories": 0, 
+                    "info": "initial_message",
+                    "search_time_ms": 0
+                }
             else:
-                # Comprehensive all-messages search
+                search_start = datetime.now()
+                logger.info("Performing comprehensive memory search for context retrieval")
+                
+                # Get all messages for this session
                 all_messages = self.db.get_messages(self.session_id)
                 
-                # Extract message contents and create embeddings for comparison
-                message_contents = [msg.get('content', '') for msg in all_messages 
-                                    if msg.get('role') in [MESSAGE_TYPES["USER"], MESSAGE_TYPES["ASSISTANT"]]]
-                
-                # Comprehensive long-term memory search
+                # Phase 1: Semantic search using vector similarity
+                logger.info("Phase 1: Performing vector similarity search")
                 similar_memories = []
                 if query_embedding:
+                    # Increased search capacity for more thorough exploration
                     similar_memories = self.db.get_memory_by_similarity(
                         query_embedding,
                         self.session_id,
-                        top_k=100,  # Increased capacity for exhaustive search
-                        min_score=0.0  # Include all messages and filter later
+                        top_k=200,  # Significantly increased search depth
+                        min_score=0.0,  # Include all memories for comprehensive search
+                        search_messages=True  # Search both memories and message history
                     )
+                    
+                    logger.info(f"Retrieved {len(similar_memories)} memories through vector similarity")
                 
-                # Get all messages as potential context
+                # Phase 2: Get all long-term memories as fallback
+                logger.info("Phase 2: Retrieving all long-term memories to ensure completeness")
                 all_long_term_memories = await self.memory_manager.get_all_long_term_memories()
+                logger.info(f"Retrieved {len(all_long_term_memories)} long-term memories from storage")
                 
-                # Merge similar memories with all long-term memories
-                long_term_memories = similar_memories + all_long_term_memories
+                # Phase 3: Combine and deduplicate memories
+                logger.info("Phase 3: Merging and deduplicating memory sources")
+                combined_memories = similar_memories + all_long_term_memories
                 
-                # Deduplicate long-term memories to avoid redundancy
-                long_term_memories = self.context_integrator.deduplicate_memories(long_term_memories)
-                
-                # Format context from long-term memories only
-                context_messages, context_metadata = self.context_formatter.format_memories(
-                    [],  # Empty short-term memories
-                    long_term_memories,
-                    message,
-                    include_temporal=True,
-                    redundancy_filter=False
+                # Advanced deduplication with intelligent pattern matching
+                long_term_memories = self.context_integrator.deduplicate_memories(
+                    combined_memories,
+                    similarity_threshold=0.90  # Slightly higher threshold to preserve nuanced differences
                 )
-            
-            # Validate context
-            validated_messages, validation_info = self.context_formatter.validate_context(
-                context_messages
-            )
+                
+                logger.info(f"After deduplication: {len(long_term_memories)} unique memories")
+                
+                # Phase 4: Format and prepare context
+                logger.info("Phase 4: Integrating memories into coherent context")
+                # Use our enhanced context formatter directly
+                merged_context, context_metadata = self.context_integrator.merge_context(
+                    short_term_memories=self.memory_manager.get_recent_messages(5),  # Get 5 most recent messages
+                    long_term_memories=long_term_memories,
+                    current_context=message,
+                    max_memories=25  # Increased from default to allow more comprehensive context
+                )
+                
+                # Format context for prompt using new enhanced formatter
+                context_text = self.context_integrator.format_context_for_prompt(
+                    merged_context, 
+                    context_metadata
+                )
+                
+                # Validate context length
+                context_text, validation_info = self.context_integrator.validate_context(
+                    context_text,
+                    max_length=MODEL_PARAMETERS["context_length"] - 1000  # Leave room for the message
+                )
+                
+                # Prepare messages for the model
+                context_messages = [
+                    {
+                        "role": MESSAGE_TYPES["SYSTEM"],
+                        "content": context_text
+                    }
+                ]
+                
+                # Track search timing
+                search_time = (datetime.now() - search_start).total_seconds() * 1000
+                context_metadata["search_time_ms"] = search_time
+                logger.info(f"Memory search and context preparation completed in {search_time:.2f}ms")
+                logger.info(f"Using {context_metadata['total_memories']} memories in final context")
 
-            # Store message with enhanced context metadata
+            # Store user message with enhanced context metadata
             await self.memory_manager.add_message(
                 MESSAGE_TYPES["USER"],
                 message,
@@ -115,21 +157,32 @@ class ChatService:
                     "embedding": query_embedding,
                     "file_data": file_data,
                     "context_metadata": context_metadata,
-                    "validation_info": validation_info,
+                    "validation_info": validation_info if 'validation_info' in locals() else {},
                     "timestamp": datetime.now().isoformat(),
-                    "is_initial_message": is_initial_message
+                    "is_initial_message": is_initial_message,
+                    "search_stats": {
+                        "vector_matches": len(similar_memories) if 'similar_memories' in locals() else 0,
+                        "long_term_memories": len(all_long_term_memories) if 'all_long_term_memories' in locals() else 0,
+                        "combined_unique": len(long_term_memories) if 'long_term_memories' in locals() else 0
+                    }
                 }
             )
 
-            # Prepare messages for model
+            # Prepare comprehensive messages for model
             messages = self._prepare_messages_with_context(
                 message,
-                validated_messages,
+                context_messages,
                 file_data
             )
 
-            # Generate response with streaming
+            # Generate response with streaming and analytics tracking
+            logger.info("Generating model response")
             response_text = ""
+            token_count = 0
+            
+            # Track response generation performance
+            generation_start = datetime.now()
+            
             async for response_chunk in self.ollama_client.generate_chat_response(
                 st.session_state.get(SessionKeys.CURRENT_MODEL),
                 messages,
@@ -139,28 +192,42 @@ class ChatService:
                     yield response_chunk
                 if response_chunk:
                     response_text += response_chunk
+                    token_count += 1
+
+            # Calculate response time
+            generation_time = (datetime.now() - generation_start).total_seconds() * 1000
+            logger.info(f"Response generated in {generation_time:.2f}ms with ~{token_count} chunks")
 
             if response_text:
-                # Store assistant response with context tracking
+                # Generate embedding for assistant response to enable future searches
                 response_embedding = await self.ollama_client.generate_embeddings(response_text)
                 response_embedding_list = response_embedding.tolist() if hasattr(response_embedding, 'tolist') else response_embedding
                 
-                # Track context usage
-                usage_stats = self.context_formatter.get_context_usage_stats()
+                # Enhanced metadata for better memory management and analytics
+                response_metadata = {
+                    "embedding": response_embedding_list,
+                    "context_metadata": context_metadata,
+                    "timestamp": datetime.now().isoformat(),
+                    "generation_stats": {
+                        "tokens_generated": token_count,
+                        "generation_time_ms": generation_time,
+                        "total_processing_time_ms": (datetime.now() - start_time).total_seconds() * 1000
+                    }
+                }
                 
+                # Add validation info if available
+                if 'validation_info' in locals():
+                    response_metadata["validation_info"] = validation_info
+                
+                # Store assistant response with comprehensive tracking
                 await self.memory_manager.add_message(
                     MESSAGE_TYPES["ASSISTANT"],
                     response_text,
-                    {
-                        "embedding": response_embedding_list,
-                        "context_metadata": {
-                            **context_metadata,
-                            "usage_stats": usage_stats
-                        },
-                        "validation_info": validation_info,
-                        "timestamp": datetime.now().isoformat()
-                    }
+                    response_metadata
                 )
+                
+                # Log completion statistics
+                logger.info(f"Message processing complete. Total time: {(datetime.now() - start_time).total_seconds() * 1000:.2f}ms")
 
             if not stream and response_text:
                 yield response_text

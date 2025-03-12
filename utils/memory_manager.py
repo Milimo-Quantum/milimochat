@@ -404,105 +404,296 @@ class MemoryManager:
         self,
         query: str,
         limit: Optional[int] = None
-    ) -> str:
-        """Get relevant conversation context from long-term memory."""
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Get relevant conversation context from long-term memory with comprehensive search strategy."""
         try:
-            # Generate query embedding using enhanced model
+            import re
+            # Start timing for analytics
+            start_time = datetime.now()
+            
+            # Log the query request
+            logger.info(f"Context request: '{query[:50]}...' for session {self.session_id}")
+            
+            # 1. Generate query embedding with specialized prompt to improve search quality
+            enhanced_query = f"Query: {query} [Find related memories, critical user information, preferences and history]"
             query_embedding = await self.ollama_client.generate_embeddings(
-                f"Query: {query} [Memory Priority: Long-Term]",
+                enhanced_query,
                 model=EMBED_MODEL
             )
             embedding_list = query_embedding.tolist() if hasattr(query_embedding, 'tolist') else query_embedding
             
-            logger.info(f"Query embedding generated: {embedding_list[:10]}...") # Log first 10 elements of embedding
-            logger.info(f"Session ID for memory retrieval: {self.session_id}") # Log session ID
-            # Search entire long-term memory database
-            similar_memories = self.db.get_memory_by_similarity(
+            logger.info(f"Query embedding generated with shape {len(embedding_list)}")
+            
+            # 2. Multi-strategy search approach
+            
+            # 2.1 First strategy: Vector similarity search with high depth
+            similarity_search_start = datetime.now()
+            vector_memories = self.db.get_memory_by_similarity(
                 embedding_list,
                 self.session_id,
-                top_k=100,  # Search entire memory store
-                min_score=0.0  # Include all memories
+                top_k=200,  # Significantly increased for thorough search
+                min_score=0.0  # Include all memories for post-processing filtering
             )
+            similarity_search_time = (datetime.now() - similarity_search_start).total_seconds() * 1000
+            logger.info(f"Vector search retrieved {len(vector_memories)} memories in {similarity_search_time:.2f}ms")
             
-            # Enhanced relevance weighting
+            # 2.2 Second strategy: Exact text matching for critical patterns
+            text_search_start = datetime.now()
+            
+            # Extract key terms for exact matching
+            def extract_key_terms(text):
+                # Extract proper nouns (capitalized words)
+                proper_nouns = re.findall(r'\b[A-Z][a-z]+\b', text)
+                
+                # Extract potential entities from "what is" questions
+                what_is_entities = re.findall(r'what (?:is|are) (?:my|the|a|an)? ([a-zA-Z0-9 ]+)', text.lower())
+                
+                # Extract potential key nouns
+                key_nouns = re.findall(r'\b(?:name|email|phone|address|preference|favorite|birthday|age)\b', text.lower())
+                
+                return proper_nouns + what_is_entities + key_nouns
+            
+            key_terms = extract_key_terms(query)
+            exact_match_memories = []
+            
+            # Only perform exact match search if we have meaningful terms
+            if key_terms:
+                logger.info(f"Extracted key terms for exact matching: {key_terms}")
+                
+                # Get all long-term memories
+                all_memories = await self.get_all_long_term_memories()
+                
+                # Look for exact matches with each term
+                for term in key_terms:
+                    if len(term) < 3:  # Skip very short terms
+                        continue
+                        
+                    term_lower = term.lower()
+                    for memory in all_memories:
+                        content = memory.get('content', '').lower()
+                        
+                        # Check if memory contains the term
+                        if term_lower in content:
+                            # Special boost for name-related queries
+                            if 'name' in query.lower() and 'name' in content and term_lower in content:
+                                memory['exact_match'] = True
+                                memory['priority_boost'] = 5.0
+                                memory['match_term'] = term
+                                exact_match_memories.append(memory)
+                                logger.info(f"Found exact name match: '{term}' in '{content[:50]}...'")
+                            else:
+                                memory['exact_match'] = True
+                                memory['priority_boost'] = 2.0
+                                memory['match_term'] = term
+                                exact_match_memories.append(memory)
+            
+            text_search_time = (datetime.now() - text_search_start).total_seconds() * 1000
+            logger.info(f"Text search found {len(exact_match_memories)} exact matches in {text_search_time:.2f}ms")
+            
+            # 2.3 Third strategy: Get recent messages as potential context
+            recent_search_start = datetime.now()
+            recent_messages = self.get_recent_messages(5)  # Last 5 messages
+            recent_memories = []
+            
+            for msg in recent_messages:
+                # Add as a memory with appropriate metadata
+                recent_memories.append({
+                    'content': msg.get('content', ''),
+                    'created_at': msg.get('timestamp', datetime.now().isoformat()),
+                    'recency_score': 0.9,  # High recency score
+                    'source': 'recent_message'
+                })
+            
+            recent_search_time = (datetime.now() - recent_search_start).total_seconds() * 1000
+            logger.info(f"Recent message search found {len(recent_memories)} messages in {recent_search_time:.2f}ms")
+            
+            # 3. Combine and deduplicate memories from all strategies
+            combined_start = datetime.now()
+            
+            # Merge all memory sources, prioritizing exact matches
+            all_memories = exact_match_memories + vector_memories + recent_memories
+            
+            # Deduplicate memories using content-based comparison
+            seen_contents = set()
+            unique_memories = []
+            
+            for memory in all_memories:
+                content = memory.get('content', '').strip()
+                content_hash = hash(content.lower())
+                
+                if content and content_hash not in seen_contents:
+                    unique_memories.append(memory)
+                    seen_contents.add(content_hash)
+            
+            # 4. Enhanced scoring with multi-factor prioritization
+            scored_memories = []
             now = datetime.now()
-            for memory in similar_memories:
-                # Calculate memory age
-                mem_time = datetime.fromisoformat(memory['created_at'])
-                hours_old = (now - mem_time).total_seconds() / 3600
+            
+            for memory in unique_memories:
+                # Start with base similarity score (if available)
+                base_score = memory.get('similarity', 0.5)  # Default if no similarity score
                 
-                # Calculate freshness boost from recent accesses
+                # Apply boosting factors
+                
+                # Factor 1: Exact match boost
+                if memory.get('exact_match', False):
+                    base_score *= memory.get('priority_boost', 2.0)
+                
+                # Factor 2: Recency boost
+                try:
+                    mem_time = datetime.fromisoformat(memory['created_at'])
+                    hours_old = max(0.1, (now - mem_time).total_seconds() / 3600)
+                    
+                    # Logarithmic decay for recency (gentler than exponential)
+                    recency_score = 1.0 / (1.0 + math.log10(hours_old / 24 + 1))
+                except (ValueError, KeyError):
+                    recency_score = 0.5
+                
+                # Factor 3: Access history boost
                 access_count = len(memory.get('access_times', []))
-                last_access_hours = (now - datetime.fromisoformat(
-                    memory.get('last_accessed', now.isoformat())
-                )).total_seconds() / 3600
+                access_boost = min(1.5, 1.0 + (access_count * 0.1))  # Cap at 1.5x
                 
-                # Calculate boosted similarity score
-                freshness_boost = 1 + (access_count * 0.05) + (1 / (last_access_hours + 1))
-                type_boost = 1.2 if memory.get('metadata', {}).get('memory_type') == 'long_term' else 1
-                memory['boosted_similarity'] = memory['similarity'] * freshness_boost * type_boost
+                # Factor 4: Source-specific adjustments
+                source_boost = 1.0
+                memory_source = memory.get('source', memory.get('type', 'unknown'))
                 
-                # Apply gentle age decay
-                memory['boosted_similarity'] *= max(0.7, 1 - (hours_old / 8760))  # 1 year half-life
-
-            # Sort by boosted similarity
-            similar_memories.sort(key=lambda x: -x['boosted_similarity'])
+                if memory_source == 'message' and memory.get('role') == 'user':
+                    source_boost = 1.3  # Boost user messages
+                elif memory_source == 'recent_message':
+                    source_boost = 1.2  # Boost recent conversation
+                    
+                # Calculate final score with weighted factors
+                # 60% similarity, 20% recency, 10% access history, 10% source
+                final_score = (
+                    base_score * 0.6 + 
+                    recency_score * 0.2 +
+                    access_boost * 0.1 +
+                    source_boost * 0.1
+                )
+                
+                # Special case: explicitly named matches always get highest priority
+                if memory.get('exact_match') and 'name' in query.lower() and 'name' in memory.get('content', '').lower():
+                    final_score = 10.0  # Ensure it's at the top
+                
+                memory['final_score'] = final_score
+                scored_memories.append(memory)
             
-            # Format memories with full context
-            formatted_memories = [
-                self.context_integrator.format_memory_for_context(m, "long_term")
-                for m in similar_memories if m
-            ]
+            # Sort by final score
+            scored_memories.sort(key=lambda x: x.get('final_score', 0), reverse=True)
             
-            # Directly use long-term memories without short-term merge
-            # Merge context using the existing merge_context method
+            # Take top memories based on limit
+            top_limit = limit or 20  # Default to 20 if no limit specified
+            top_memories = scored_memories[:top_limit]
+            
+            # Format memories for context integration
+            formatted_memories = []
+            for memory in top_memories:
+                formatted = self.context_integrator.format_memory_for_context(
+                    memory, 
+                    "long_term" if memory.get('source') != 'recent_message' else "short_term"
+                )
+                if formatted:
+                    formatted_memories.append(formatted)
+            
+            combined_time = (datetime.now() - combined_start).total_seconds() * 1000
+            logger.info(f"Memory combining, scoring and formatting took {combined_time:.2f}ms")
+            
+            # 5. Merge context with optimized params for this type of search
+            merge_start = datetime.now()
             merged_context, context_metadata = self.context_integrator.merge_context(
-                short_term_memories=[],  # Empty since we're only using long-term
+                short_term_memories=[],  # Already included in our comprehensive search
                 long_term_memories=formatted_memories,
                 current_context=query,
-                max_memories=len(formatted_memories)
-            )
-            
-            # Track context usage
-            context_usage = {
-                'query': query,
-                'timestamp': datetime.now().isoformat()
-            }
-            
-            # Store context usage in database
-            self.db.save_memory(
-                f"context_usage_{datetime.now().isoformat()}",
-                json.dumps(context_usage),
-                None,  # No embedding needed
-                {
-                    'type': 'context_usage',
-                    'session_id': self.session_id,
-                    'timestamp': datetime.now().isoformat()
-                }
+                max_memories=top_limit  # Use our adjusted limit
             )
             
             # Format for prompt
             context_string = self.context_integrator.format_context_for_prompt(
                 merged_context,
-                context_metadata  # Use the metadata from merge_context
+                context_metadata
             )
             
             # Validate and potentially truncate context
             validated_context, validation_info = self.context_integrator.validate_context(
-                context_string
+                context_string,
+                max_length=MODEL_PARAMETERS["context_length"] - 1000  # Leave room for the prompt and query
             )
             
-            logger.info(f"similar_memories length: {len(similar_memories)}")
-            if similar_memories:
-                logger.info(f"First similar memory: {similar_memories[0].get('content')[:100]}...")
-                logger.info(f"First similar memory similarity: {similar_memories[0].get('similarity')}")
-                for i, mem in enumerate(similar_memories[:3]): # Log content and similarity of top 3 memories
-                    logger.info(f"Top {i+1} similar memory content: {mem.get('content')[:100]}...")
-                    logger.info(f"Top {i+1} similar memory similarity: {mem.get('similarity')}")
-            logger.info(f"formatted_memories length: {len(formatted_memories)}")
-            logger.info(f"merged_context length: {len(merged_context)}")
-            logger.info(f"context_metadata: {context_metadata}")
+            merge_time = (datetime.now() - merge_start).total_seconds() * 1000
+            logger.info(f"Context merging and formatting took {merge_time:.2f}ms")
+            
+            # 6. Track usage and update access statistics
+            for memory in top_memories:
+                memory_key = memory.get('key')
+                if memory_key:
+                    try:
+                        # Update access timestamp and count
+                        mem_db = await self.get_memory_by_key(memory_key)
+                        if mem_db:
+                            access_times = mem_db.get('access_times', [])
+                            access_times.append(datetime.now().isoformat())
+                            
+                            # Update memory with new access info
+                            self.db.save_memory(
+                                memory_key,
+                                memory.get('content', ''),
+                                None,  # Don't change embedding
+                                {
+                                    **mem_db.get('metadata', {}),
+                                    'access_times': access_times,
+                                    'last_accessed': datetime.now().isoformat(),
+                                    'access_count': len(access_times)
+                                }
+                            )
+                    except Exception as e:
+                        logger.error(f"Error updating memory access stats: {str(e)}")
+            
+            # Prepare context usage stats for return
+            total_time = (datetime.now() - start_time).total_seconds() * 1000
+            
+            context_usage = {
+                'query': query,
+                'timestamp': datetime.now().isoformat(),
+                'total_memories_searched': len(all_memories),
+                'unique_memories': len(unique_memories),
+                'memories_used': len(merged_context),
+                'exact_matches': len(exact_match_memories),
+                'vector_matches': len(vector_memories),
+                'processing_time_ms': total_time,
+                'search_times': {
+                    'vector_search_ms': similarity_search_time,
+                    'text_search_ms': text_search_time,
+                    'recent_search_ms': recent_search_time,
+                    'combine_score_ms': combined_time,
+                    'merge_format_ms': merge_time
+                }
+            }
+            
+            # Log stats to database for analysis
+            try:
+                self.db.save_memory(
+                    f"context_usage_{datetime.now().timestamp()}",
+                    json.dumps(context_usage),
+                    None,  # No embedding needed
+                    {
+                        'type': 'context_usage',
+                        'session_id': self.session_id,
+                        'timestamp': datetime.now().isoformat()
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Error saving context usage stats: {str(e)}")
+            
+            # Log completion and stats
+            logger.info(f"Context retrieval complete in {total_time:.2f}ms")
+            logger.info(f"Retrieved {len(merged_context)} memories for context")
+            
+            if top_memories:
+                top_memory = top_memories[0]
+                logger.info(f"Top memory ({top_memory.get('final_score', 0):.2f}): {top_memory.get('content', '')[:100]}...")
+            
             return validated_context, context_usage
+
 
         except Exception as e:
             logger.error(f"Error getting relevant context: {str(e)}")
