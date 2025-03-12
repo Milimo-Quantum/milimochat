@@ -66,7 +66,7 @@ class ContextIntegrator:
         query_embedding: Optional[np.ndarray] = None,
         vector_weight: float = 0.7
     ) -> List[Dict[str, Any]]:
-        """Prioritize memories using semantic similarity and robust scoring."""
+        """Prioritize memories using semantic similarity and robust scoring with enhanced source handling."""
         try:
             scored_memories = []
             
@@ -74,24 +74,52 @@ class ContextIntegrator:
                 if not isinstance(memory, dict):
                     continue
 
-                # Skip recently used memories
+                # Skip recently used memories unless they have very high relevance
                 memory_key = memory.get('key')
                 if memory_key in self.seen_memory_keys:
-                    continue
+                    # Check if this is a high-relevance memory that should override the skip
+                    if memory.get('relevance_score', 0.0) < 0.95:
+                        continue
 
-                # Base score with semantic boost for long-term memories
+                # Base score with source-specific adjustments
                 base_score = memory.get('relevance_score', 0.0)
-                if memory.get('type') == 'long_term' and 'embedding' in memory:
-                    base_score = 0.0  # Remove relevance threshold
+                
+                # Different handling based on memory source
+                memory_source = memory.get('source', memory.get('type', 'unknown'))
+                if memory_source == 'message':
+                    # Messages get full weight on semantic relevance
+                    base_score = 0.0
+                elif memory_source == 'long_term' and 'embedding' in memory:
+                    base_score = 0.0  # Remove relevance threshold for long-term memories with embeddings
+                elif memory_source == 'file_chunk':
+                    # File chunks get a small boost as they often contain valuable information
+                    base_score = 0.1
 
-                # Recency decay adjustment
-                timestamp = datetime.fromisoformat(memory['created_at'])
-                hours_diff = (datetime.now() - timestamp).total_seconds() / 3600
-                recency_score = np.exp(-hours_diff/480)  # 20-day half-life for longer retention
-
-                # Semantic similarity scoring
+                # Enhanced recency scoring with source-specific adjustments
+                created_at = memory.get('created_at', memory.get('timestamp'))
+                if not created_at:
+                    recency_score = 0.5  # Default for memories without timestamp
+                else:
+                    try:
+                        timestamp = datetime.fromisoformat(created_at)
+                        hours_diff = (datetime.now() - timestamp).total_seconds() / 3600
+                        
+                        # Different decay rates based on source
+                        if memory_source == 'message':
+                            # Messages have shorter relevance decay (7-day half-life)
+                            recency_score = np.exp(-hours_diff/168)
+                        else:
+                            # Longer half-life for other memories (30-day half-life)
+                            recency_score = np.exp(-hours_diff/720)
+                    except (ValueError, TypeError):
+                        recency_score = 0.5  # Default if timestamp parsing fails
+                
+                # Comprehensive semantic similarity scoring with fallbacks
                 context_score = 0.0
                 exact_match = False
+                phrase_match = False
+                
+                # Try vector similarity first if available
                 if query_embedding is not None and memory.get('embedding'):
                     try:
                         # Cosine similarity for vectorized memories
@@ -99,45 +127,88 @@ class ContextIntegrator:
                         context_score = np.dot(query_embedding, memory_embedding) / (
                             np.linalg.norm(query_embedding) * np.linalg.norm(memory_embedding)
                         )
-                        
-                        # Check for exact phrase match in content
-                        if memory.get('content') and current_context:
-                            exact_match = current_context.lower() in memory['content'].lower()
-                            if exact_match:
-                                context_score = max(context_score, 1.0)  # Max score for exact matches
                     except Exception as e:
                         print(f"Embedding error: {str(e)}")
-                elif memory.get('content') and current_context:
-                    # Fallback to BM25-style text matching
-                    memory_tokens = memory['content'].lower().split()
-                    context_tokens = current_context.lower().split()
-                    common_tokens = set(memory_tokens) & set(context_tokens)
-                    context_score = sum(
-                        (memory_tokens.count(t) * context_tokens.count(t)) /
-                        (len(memory_tokens) + len(context_tokens))
-                        for t in common_tokens
-                    )
-                    # Boost exact matches
-                    if current_context.lower() in memory['content'].lower():
-                        context_score = 1.0
-
-                # Combined scoring with adjusted weights
-                final_score = context_score * 1.0  # Base scoring purely on semantic relevance
                 
-                # Apply boosts
-                if exact_match:
-                    final_score *= 3.0  # Triple score for exact matches
-                    # Additional boost for phrase matches
-                    if current_context.lower().strip() in memory['content'].lower().strip():
-                        final_score *= 1.5
-                elif memory.get('type') == 'long_term' and context_score > 0.5:
-                    final_score *= 1.25  # Smaller boost for good matches
+                # Always check for text matches regardless of embedding availability
+                if memory.get('content') and current_context:
+                    # Check for exact phrase match
+                    memory_content = memory['content'].lower()
+                    context_lower = current_context.lower()
+                    
+                    # Complete phrase match
+                    if context_lower in memory_content:
+                        exact_match = True
+                        context_score = max(context_score, 1.0)  # Max score for exact matches
+                    
+                    # Partial phrase matches
+                    elif len(context_lower) > 4:  # Only for substantial queries
+                        # Check for sentence fragments
+                        for fragment in self._get_phrases(context_lower):
+                            if len(fragment) > 4 and fragment in memory_content:
+                                phrase_match = True
+                                context_score = max(context_score, 0.8)  # Good score for phrase matches
+                    
+                    # No vector or phrase match, fall back to token-based matching
+                    if context_score < 0.4:
+                        memory_tokens = memory_content.split()
+                        context_tokens = context_lower.split()
+                        
+                        if memory_tokens and context_tokens:
+                            common_tokens = set(memory_tokens) & set(context_tokens)
+                            if common_tokens:
+                                token_score = sum(
+                                    (memory_tokens.count(t) * context_tokens.count(t)) /
+                                    (len(memory_tokens) + len(context_tokens))
+                                    for t in common_tokens
+                                ) * 2.0  # Scale up token matching
+                                
+                                context_score = max(context_score, token_score)
 
-                scored_memories.append({
+                # Comprehensive scoring with source-specific adjustments
+                # Base weight is now purely on semantic relevance
+                final_score = context_score
+                
+                # Add boosting factors based on match type and source
+                if exact_match:
+                    boost_factor = 3.0  # Strong boost for exact matches
+                    
+                    # Extra boost for exact matches in important sources
+                    if memory_source == 'message':
+                        if memory.get('role') == 'user':
+                            boost_factor *= 1.2  # User messages are important
+                    
+                    final_score *= boost_factor
+                    
+                elif phrase_match:
+                    boost_factor = 1.5  # Moderate boost for phrase matches
+                    final_score *= boost_factor
+                    
+                elif context_score > 0.5:
+                    # Decent semantic match gets modest boost
+                    boost_factor = 1.0
+                    
+                    # File chunks and long-term memories with good scores get extra boost
+                    if memory_source in ['file_chunk', 'long_term']:
+                        boost_factor = 1.25
+                        
+                    final_score *= boost_factor
+                
+                # Apply recency influence (30% of score is based on recency)
+                final_score = (final_score * 0.7) + (recency_score * 0.3)
+                
+                # Additional metadata for debugging and analysis
+                memory_with_score = {
                     **memory,
                     'priority_score': final_score,
-                    'exact_match': exact_match
-                })
+                    'semantic_score': context_score,
+                    'recency_score': recency_score,
+                    'exact_match': exact_match,
+                    'phrase_match': phrase_match,
+                    'source': memory_source
+                }
+                
+                scored_memories.append(memory_with_score)
 
             # Sort by final score
             scored_memories.sort(key=lambda x: x['priority_score'], reverse=True)
@@ -147,6 +218,28 @@ class ContextIntegrator:
         except Exception as e:
             print(f"Error prioritizing memories: {str(e)}")
             return memories
+    
+    def _get_phrases(self, text: str, min_phrase_length: int = 3) -> List[str]:
+        """Extract meaningful phrases from text for better matching."""
+        words = text.split()
+        phrases = []
+        
+        # Single words (if long enough)
+        phrases.extend([w for w in words if len(w) >= min_phrase_length])
+        
+        # 2-word phrases
+        if len(words) >= 2:
+            phrases.extend([' '.join(words[i:i+2]) for i in range(len(words)-1)])
+            
+        # 3-word phrases
+        if len(words) >= 3:
+            phrases.extend([' '.join(words[i:i+3]) for i in range(len(words)-2)])
+            
+        # 4-word phrases for longer text
+        if len(words) >= 4:
+            phrases.extend([' '.join(words[i:i+4]) for i in range(len(words)-3)])
+            
+        return phrases
 
     def deduplicate_memories(
         self,

@@ -352,10 +352,14 @@ class Database:
         query_vector: List[float],
         session_id: Optional[str] = None,
         top_k: int = 5,
-        min_score: float = 0.0
+        min_score: float = 0.0,
+        search_messages: bool = True
     ) -> List[Dict[str, Any]]:
-        """Retrieve memories based on vector similarity."""
+        """Retrieve memories based on vector similarity with enhanced message search."""
         try:
+            memories = []
+            
+            # Search vector store for memory entries
             query = """
                 SELECT m.*, v.vector
                 FROM memory m
@@ -367,8 +371,8 @@ class Database:
                 query += " WHERE m.session_id = ?"
                 params.append(session_id)
             
-            logger.info(f"Executing query: {query} with params: {params}") # Log query
-            memories = []
+            logger.info(f"Executing memory query: {query} with params: {params}") # Log query
+            
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(query, params)
@@ -384,11 +388,59 @@ class Database:
                             'created_at': row['created_at'],
                             'metadata': json.loads(row['metadata']) if row['metadata'] else {},
                             'similarity': similarity,
-                            'chunk_index': row['chunk_index']
+                            'chunk_index': row['chunk_index'],
+                            'source': 'memory'
                         })
+            
+            # Also search message history if enabled
+            if search_messages:
+                message_query = """
+                    SELECT m.*, v.id as vector_id, v.vector
+                    FROM messages m
+                    JOIN vector_store v ON json_extract(m.metadata, '$.vector_id') = v.id
+                    WHERE m.session_id = ?
+                """
+                
+                logger.info(f"Executing messages query: {message_query} with params: [{session_id}]") # Log query
+                
+                with self._get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(message_query, (session_id,))
+                    
+                    for row in cursor.fetchall():
+                        try:
+                            if row['vector']:
+                                vector = self._deserialize_vector(row['vector'])
+                                similarity = self._cosine_similarity(query_vector, vector)
+                                
+                                if similarity >= min_score:
+                                    metadata = {}
+                                    if row['metadata']:
+                                        try:
+                                            metadata = json.loads(row['metadata'])
+                                        except:
+                                            pass
+                                    
+                                    memories.append({
+                                        'key': f"message_{row['id']}",
+                                        'content': row['content'],
+                                        'created_at': row['timestamp'],
+                                        'metadata': metadata,
+                                        'similarity': similarity,
+                                        'role': row['role'],
+                                        'source': 'message'
+                                    })
+                        except Exception as e:
+                            logger.error(f"Error processing message row: {str(e)}")
             
             # Sort by similarity and return top-k
             memories.sort(key=lambda x: x['similarity'], reverse=True)
+            
+            # Log retrieval statistics
+            logger.info(f"Retrieved {len(memories)} memories/messages with {len([m for m in memories if m.get('source') == 'message'])} from messages")
+            if memories:
+                logger.info(f"Top memory similarity: {memories[0]['similarity']}, content: {memories[0]['content'][:100]}...")
+            
             return memories[:top_k]
         except Exception as e:
             print(f"Error retrieving memories by similarity: {str(e)}")

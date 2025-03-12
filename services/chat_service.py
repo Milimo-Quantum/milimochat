@@ -3,6 +3,7 @@ from datetime import datetime
 import asyncio
 import json
 import streamlit as st
+import logging
 
 from utils.ollama_client import OllamaClient
 from utils.memory_manager import MemoryManager
@@ -47,53 +48,66 @@ class ChatService:
         self,
         message: str,
         file_data: Optional[Dict[str, Any]] = None,
-        stream: bool = True
+        stream: bool = True,
+        is_initial_message: bool = False
     ) -> AsyncGenerator[str, None]:
         """Process a user message with enhanced context integration."""
         try:
             # Generate embeddings for message
             message_embedding = await self.ollama_client.generate_embeddings(message)
             
-            # Get relevant memories
             # Convert message embedding to list if it's numpy array
             query_embedding = message_embedding.tolist() if hasattr(message_embedding, 'tolist') else message_embedding
             
-            # Comprehensive long-term memory search
-            similar_memories = []
-            if query_embedding:
-                similar_memories = self.db.get_memory_by_similarity(
-                    query_embedding,
-                    self.session_id,
-                    top_k=50,  # Increased capacity for exhaustive search
-                    similarity_threshold=0.25,  # Broader context capture
+            # Skip previous message search for initial message in conversation
+            if is_initial_message:
+                long_term_memories = []
+                context_messages = []
+                context_metadata = {"total_memories": 0, "info": "initial_message"}
+                logger = logging.getLogger(__name__)
+                logger.info("Initial message detected, skipping context retrieval")
+            else:
+                # Comprehensive all-messages search
+                all_messages = self.db.get_messages(self.session_id)
+                
+                # Extract message contents and create embeddings for comparison
+                message_contents = [msg.get('content', '') for msg in all_messages 
+                                    if msg.get('role') in [MESSAGE_TYPES["USER"], MESSAGE_TYPES["ASSISTANT"]]]
+                
+                # Comprehensive long-term memory search
+                similar_memories = []
+                if query_embedding:
+                    similar_memories = self.db.get_memory_by_similarity(
+                        query_embedding,
+                        self.session_id,
+                        top_k=100,  # Increased capacity for exhaustive search
+                        min_score=0.0  # Include all messages and filter later
+                    )
+                
+                # Get all messages as potential context
+                all_long_term_memories = await self.memory_manager.get_all_long_term_memories()
+                
+                # Merge similar memories with all long-term memories
+                long_term_memories = similar_memories + all_long_term_memories
+                
+                # Deduplicate long-term memories to avoid redundancy
+                long_term_memories = self.context_integrator.deduplicate_memories(long_term_memories)
+                
+                # Format context from long-term memories only
+                context_messages, context_metadata = self.context_formatter.format_memories(
+                    [],  # Empty short-term memories
+                    long_term_memories,
+                    message,
                     include_temporal=True,
-                    include_attachments=True  # Ensure file content is included
+                    redundancy_filter=False
                 )
-
-            # Fetch all long-term memories
-            all_long_term_memories = await self.memory_manager.get_all_long_term_memories()
-
-            # Merge similar memories with all long-term memories, prioritizing similar ones
-            long_term_memories = similar_memories + all_long_term_memories
-
-            # Deduplicate long-term memories to avoid redundancy
-            long_term_memories = self.context_integrator.deduplicate_memories(long_term_memories)
-
-            # Format context from long-term memories only
-            context_messages, context_metadata = self.context_formatter.format_memories(
-                [],  # Empty short-term memories
-                long_term_memories,
-                message,
-                include_temporal=True,
-                redundancy_filter=False
-            )
             
             # Validate context
             validated_messages, validation_info = self.context_formatter.validate_context(
                 context_messages
             )
 
-            # Store message with context metadata
+            # Store message with enhanced context metadata
             await self.memory_manager.add_message(
                 MESSAGE_TYPES["USER"],
                 message,
@@ -102,7 +116,8 @@ class ChatService:
                     "file_data": file_data,
                     "context_metadata": context_metadata,
                     "validation_info": validation_info,
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
+                    "is_initial_message": is_initial_message
                 }
             )
 

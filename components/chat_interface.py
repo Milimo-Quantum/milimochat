@@ -167,11 +167,15 @@ class ChatInterface:
             )
 
             with st.chat_message("assistant", avatar=self.get_assistant_avatar()):
-                response = asyncio.run(self._generate_streaming_response(prompt))
+                # Check if this is the first message in the conversation
+                is_initial_message = len(self.chat_state.get_messages()) <= 1
+                
+                response = asyncio.run(self._generate_streaming_response(prompt, is_initial_message))
                 if response:
                     self.chat_state.save_message(
                         role=MESSAGE_TYPES["ASSISTANT"],
-                        content=response
+                        content=response,
+                        metadata={"is_response_to_initial": is_initial_message}
                     )
 
             st.session_state.retry_message = None
@@ -245,11 +249,15 @@ class ChatInterface:
             )
 
             with st.chat_message("assistant", avatar=self.get_assistant_avatar()):
-                response = asyncio.run(self._generate_streaming_response(prompt))
+                # Check if this is the first message in the conversation
+                is_initial_message = len(self.chat_state.get_messages()) <= 1
+                
+                response = asyncio.run(self._generate_streaming_response(prompt, is_initial_message))
                 if response:
                     self.chat_state.save_message(
                         role=MESSAGE_TYPES["ASSISTANT"],
-                        content=response
+                        content=response,
+                        metadata={"is_response_to_initial": is_initial_message}
                     )
                     st.session_state.current_image = None
 
@@ -374,8 +382,13 @@ class ChatInterface:
 
         return "".join(message_parts)
 
-    async def _generate_streaming_response(self, prompt: str) -> Optional[str]:
-        """Generate streaming response with enhanced context and file handling."""
+    async def _generate_streaming_response(self, prompt: str, is_initial_message: bool = False) -> Optional[str]:
+        """Generate streaming response with enhanced context and file handling.
+        
+        Args:
+            prompt: The user's message
+            is_initial_message: Whether this is the first message in a conversation
+        """
 
         try:
             current_model = st.session_state.get(SessionKeys.CURRENT_MODEL)
@@ -450,15 +463,22 @@ class ChatInterface:
 
                 # status.write("💭 Generating response...")
 
-                # Generate response with streaming
+                # Pass the is_initial_message flag to process_message
                 message_placeholder = st.empty()
                 full_response = ""
+
+                # Log the message status for debugging
+                if is_initial_message:
+                    status.write("💬 Processing initial message in conversation...")
+                else:
+                    status.write("💬 Processing follow-up message...")
 
                 try:
                     async for chunk in self.chat_service.process_message(
                         prompt,
                         file_data=st.session_state.get('_current_file_data'),
-                        stream=True
+                        stream=True,
+                        is_initial_message=is_initial_message
                     ):
                         if chunk:
                             full_response += chunk
